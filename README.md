@@ -4,6 +4,13 @@
 
 <H2>What's New</H2>
 
+<p>In release 1.9.2</p>
+<ul>
+<li>This version of Gerbmerge is based on the fork from https://github.com/provideyourown/gerbmerge
+<li>Added support for oval holes in the Excellon drill files
+</ul>
+
+
 <p>In release 1.9.1</p>
 <ul>
 <li>This version of Gerbmerge is based on the fork from https://github.com/provideyourown/gerbmerge

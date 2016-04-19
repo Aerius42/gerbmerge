@@ -27,6 +27,7 @@ import config
 import makestroke
 import amacro
 import geometry
+import util
 
 # Parsing Gerber/Excellon files is currently very brittle. A more robust
 # RS274X/Excellon parser would be a good idea and allow this program to work
@@ -96,6 +97,9 @@ xtdef2_pat = re.compile(r'^(T\d+)C([0-9.]+)(?:F\d+)?(?:S\d+)?$') # Tool+diameter
                                                                 # feed/speed at the end (for OrCAD)
 xzsup_pat = re.compile(r'^INCH,([LT])Z$')      # Leading/trailing zeros INCLUDED
 xzsup2_pat = re.compile(r'^METRIC,([LT])Z$')   # KHK fix for METRIC, Leading/trailing zeros INCLUDED
+
+# Aerius adds Oval holes for drilling
+ovalXYGXYG_pat = re.compile(r'^X([+-]?\d+)Y([+-]?\d+)G85X([+-]?\d+)Y([+-]?\d+)$')
 
 XIgnoreList = ( \
   re.compile(r'^%$'),
@@ -273,8 +277,40 @@ class Job:
           else:                                                     # KHK inch
             command_list[0] += x_shift/10
             command_list[1] += y_shift/10
-            
+        
+        # Aerius adds oval holes support
+        elif ( type( command_list[0] ) == types.TupleType ) \
+        and ( type( command_list[1] ) == types.TupleType ):  ## ensure that first two elemenst are tuple
+          sub_command_list_x = list(command_list[0])              ## convert the "sub-tuple" to list
+          sub_command_list_y = list(command_list[1])
           
+          if ( type( sub_command_list_x[0] ) == types.IntType ) \
+          and ( type( sub_command_list_x[1] ) == types.IntType ) \
+          and ( type( sub_command_list_y[0] ) == types.IntType ) \
+          and ( type( sub_command_list_y[1] ) == types.IntType ):  ## ensure that first two elemenst are integers
+          
+            # Aerius: Same as above for KHK but for the sub tuple instead
+            if config.Config['measurementunits'] == 'mm':             # KHK from layout.cfg file
+              if config.Config['kicadfilesinmetricunits'] == 1:       # KHK for Kicad metric file support
+                sub_command_list_x[0] += x_shift
+                sub_command_list_x[1] += x_shift
+                sub_command_list_y[0] += y_shift
+                sub_command_list_y[1] += y_shift
+              else:
+                sub_command_list_x[0] += x_shift/10                        # mm but not Kicad ... like in version 1.9.  
+                sub_command_list_x[1] += x_shift/10
+                sub_command_list_y[0] += y_shift/10
+                sub_command_list_y[1] += y_shift/10
+            else:                                                     # KHK inch
+              sub_command_list_x[0] += x_shift/10
+              sub_command_list_x[1] += x_shift/10
+              sub_command_list_y[0] += y_shift/10
+              sub_command_list_y[1] += y_shift/10
+              
+          command_list[0] = tuple(sub_command_list_x)
+          command_list[1] = tuple(sub_command_list_y)
+          
+          # Aerius : End of oval holes support
           
         command[index] = tuple(command_list)                ## convert list back to tuple
         
@@ -808,11 +844,10 @@ class Job:
           if match:
             y = xln2tenthou(match.groups())[0]
             x = last_x
-          
+      
       if match:
         if currtool is None:
           raise RuntimeError, 'File %s has plunge command without previous tool selection' % fullname
-
         try:
           self.xcommands[currtool].append((x,y))
         except KeyError:
@@ -821,6 +856,24 @@ class Job:
         last_x = x
         last_y = y
         continue
+        
+      # Aerius adds Oval hole command
+      match = ovalXYGXYG_pat.match(line)
+      if match:
+        x1, y1, x2, y2 = xln2tenthou(match.groups())
+        x = (x1,x2)
+        y = (y1,y2)
+        if currtool is None:
+          raise RuntimeError, 'File %s has plunge command without previous tool selection' % fullname
+        try:
+          self.xcommands[currtool].append((x,y))
+        except KeyError:
+          self.xcommands[currtool] = [(x,y)]
+          
+        last_x = x2
+        last_y = y2
+        continue
+        
 
       # It had better be an ignorable
       for pat in XIgnoreList:
@@ -918,15 +971,25 @@ class Job:
 
     if config.Config['excellonleadingzeros']:
       fmtstr = 'X%06dY%06d\n'
+      fmtstr_oval = 'X%06dY%06dG85X%06dY%06d\nG05\n'  # Aerius : Format for oval
     else:
       fmtstr = 'X%dY%d\n'
+      fmtstr_oval = 'X%dY%dG85X%dY%d\nG05\n' # Aerius : Format for oval
 
     # Boogie
     for ltool in ltools:
       if self.xcommands.has_key(ltool):
         for cmd in self.xcommands[ltool]:
           x, y = cmd
-          fid.write(fmtstr % (x+DX, y+DY))
+          
+          if ( type(x) == types.IntType ) \
+          and ( type(y) == types.IntType ):  ## Aerius : ensure that first two elemenst are integers
+            fid.write(fmtstr % (x+DX, y+DY))
+            
+          # Aerius : Support Oval Holes
+          elif ( type(x) == types.TupleType ) \
+          and ( type(y) == types.TupleType ):  ## ensure that first two elemenst are tuple
+            fid.write(fmtstr_oval % (x[0]+DX, y[0]+DY, x[1]+DX, y[1]+DY))
 
   def writeDrillHits(self, fid, diameter, toolNum, Xoff, Yoff):
     """Write a drill hit pattern. diameter is tool diameter in inches, while toolNum is
@@ -958,13 +1021,28 @@ class Job:
           # add metric support (1/1000 mm vs. 1/100,000 inch)
           #  makestroke.drawDrillHit(fid, 10*x+DX, 10*y+DY, toolNum)            # KHK this was the original line
           if config.Config['measurementunits'] == 'mm':            	        # KHK from layout.cfg file
-             if config.Config['kicadfilesinmetricunits'] == 1:                  # KHK for Kicad metric file support
-	        makestroke.drawDrillHit(fid, x+DX, y+DY, toolNum) 
-             else:						                # mm but not Kicad ... like in version 1.9. 
+            if config.Config['kicadfilesinmetricunits'] == 1:                  # KHK for Kicad metric file support
+              if ( type(x) == types.IntType ) \
+              and ( type(y) == types.IntType ):                               ## Aerius : ensure that first two elemenst are integers
+                makestroke.drawDrillHit(fid, x+DX, y+DY, toolNum)
+              elif ( type(x) == types.TupleType ) \
+              and ( type(y) == types.TupleType ):                             ## Aerius : ensure that first two elemenst are tuple
+                makestroke.drawDrillHit(fid, (x[0]+DX,x[1]+DX), (y[0]+DY,y[1]+DY), toolNum)
+            else:						                # mm but not Kicad ... like in version 1.9. 
 	        # TODO - verify metric scaling is correct??? 
-	        makestroke.drawDrillHit(fid, 10*x+DX, 10*y+DY, toolNum) 
+              if ( type(x) == types.IntType ) \
+              and ( type(y) == types.IntType ):                               ## Aerius : ensure that first two elemenst are integers
+                makestroke.drawDrillHit(fid, 10*x+DX, 10*y+DY, toolNum) 
+              elif ( type(x) == types.TupleType ) \
+              and ( type(y) == types.TupleType ):                             ## Aerius : ensure that first two elemenst are tuple
+                makestroke.drawDrillHit(fid, (10*x[0]+DX,10*x[1]+DX), (10*y[0]+DY,10*y[1]+DY), toolNum)
           else:                                                                 # KHK inch
-             makestroke.drawDrillHit(fid, 10*x+DX, 10*y+DY, toolNum)
+            if ( type(x) == types.IntType ) \
+            and ( type(y) == types.IntType ):                               ## Aerius : ensure that first two elemenst are integers
+              makestroke.drawDrillHit(fid, 10*x+DX, 10*y+DY, toolNum)
+            elif ( type(x) == types.TupleType ) \
+            and ( type(y) == types.TupleType ):                             ## Aerius : ensure that first two elemenst are tuple
+                makestroke.drawDrillHit(fid, (10*x[0]+DX,10*x[1]+DX), (10*y[0]+DY,10*y[1]+DY), toolNum)
 
   def aperturesAndMacros(self, layername):
     "Return dictionaries whose keys are all necessary aperture names and macro names for this layer"
@@ -1185,13 +1263,12 @@ class Job:
       # the normal metric scale factor isn't working right, so we'll leave it alone!!!!?
       
       if config.Config['measurementunits'] == 'mm':            	          # KHK from layout.cfg file
-         if config.Config['kicadfilesinmetricunits'] == 1:                # KHK for Kicad metric file support
-	    validList = [(x,y) for x,y in self.xcommands[toolname] if self.inBorders(x,y)]
-         else:						                  # KHK mm but not Kicad ... like in version 1.9.  
-	    validList = [(x,y) for x,y in self.xcommands[toolname] if self.inBorders(0.1*x,0.1*y)]
+        if config.Config['kicadfilesinmetricunits'] == 1:                # KHK for Kicad metric file support
+          validList = [(x,y) for x,y in self.xcommands[toolname] if self.inBorders(x,y) or (self.inBorders(x[0],y[0]) and self.inBorders(x[1],y[1]))]
+        else:						                  # KHK mm but not Kicad ... like in version 1.9.  
+          validList = [(x,y) for x,y in self.xcommands[toolname] if self.inBorders(0.1*x,0.1*y) or (self.inBorders(0.1*x[0],0.1*y[0]) and self.inBorders(0.1*x[1],0.1*y[1]))]
       else:                                                               # KHK inch
-         validList = [(x,y) for x,y in self.xcommands[toolname] if self.inBorders(10*x,10*y)]
-      
+        validList = [(x,y) for x,y in self.xcommands[toolname] if self.inBorders(10*x,10*y) or (self.inBorders(10*x[0],10*y[0]) and self.inBorders(10*x[1],10*y[1]))]
  
       if validList:
         self.xcommands[toolname] = validList
@@ -1478,6 +1555,8 @@ def rotateJob(job, degrees = 90, firstpass = True):
     J.xcommands[tool] = []
 
     for x,y in job.xcommands[tool]:
+      if ( type(x) == types.IntType ) \
+      and ( type(y) == types.IntType ):  ## Aerius : ensure that first two elemenst are integers
     # add metric support (1/1000 mm vs. 1/100,000 inch)
         if config.Config['measurementunits'] == 'mm':            	    # KHK for layout.cfg file
            if config.Config['kicadfilesinmetricunits'] == 1:                # KHK for Kicad metric file support
@@ -1498,9 +1577,48 @@ def rotateJob(job, degrees = 90, firstpass = True):
 
             newx = int(round(newx/10.0))
             newy = int(round(newy/10.0))  
-
+      
         J.xcommands[tool].append((newx,newy))
+      
+      # Aerius : Support Oval Holes
+      elif ( type(x) == types.TupleType ) \
+      and ( type(y) == types.TupleType ):  ## ensure that first two elemenst are tuple
+      
+      # Aerius: Same as above for KHK but for the sub tuple instead
+        if config.Config['measurementunits'] == 'mm':            	    # KHK for layout.cfg file
+           if config.Config['kicadfilesinmetricunits'] == 1:                # KHK for Kicad metric file support
+                  newx0 = -(y[0] - job.miny) + job.minx + offset
+                  newy0 =  (x[0] - job.minx) + job.miny
+                  newx1 = -(y[1] - job.miny) + job.minx + offset
+                  newy1 =  (x[1] - job.minx) + job.miny
 
+                  newx0 = int(round(newx0))
+                  newy0 = int(round(newy0))
+                  newx1 = int(round(newx1))
+                  newy1 = int(round(newy1))
+           else:						            # mm but not Kicad ... like in version 1.9.  
+                  newx0 = -(10*y[0] - job.miny) + job.minx + offset
+                  newy0 =  (10*x[0] - job.minx) + job.miny
+                  newx1 = -(10*y[1] - job.miny) + job.minx + offset
+                  newy1 =  (10*x[1] - job.minx) + job.miny
+
+                  newx0 = int(round(newx0/10.0))
+                  newy0 = int(round(newy0/10.0))	
+                  newx1 = int(round(newx1/10.0))
+                  newy1 = int(round(newy1/10.0))	
+        else:                                                               # KHK inch
+            newx0 = -(10*y[0] - job.miny) + job.minx + offset
+            newy0 =  (10*x[0] - job.minx) + job.miny
+            newx1 = -(10*y[1] - job.miny) + job.minx + offset
+            newy1 =  (10*x[1] - job.minx) + job.miny
+
+            newx0 = int(round(newx0/10.0))
+            newy0 = int(round(newy0/10.0))
+            newx1 = int(round(newx1/10.0))
+            newy1 = int(round(newy1/10.0))
+            
+        J.xcommands[tool].append(((newx0,newx1),(newy0,newy1)))      
+        
   # Rotate some more if required
   degrees -= 90
   if degrees > 0:

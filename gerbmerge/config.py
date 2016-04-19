@@ -38,7 +38,7 @@ Config = {
    'kicadfilesinmetricunits': 0,     # KHK: Kicad drill files in metric units use 3.3 number formate 
    'rounddrillsize': 0,              # KHK: for metric units the drill size will be rounded to 1/10 mm if set true (= 1)
    'searchtimeout': 0,               # moved here from hardcoded below
-   'skipdisclaimer': 0,              # set to 1 to skip disclaimer prompt
+   'skipdisclaimer': 1,              # set to 1 to skip disclaimer prompt
    'xspacing': 0,                    # Spacing in horizontal direction - default is set in parseConfigFile based on units
    'yspacing': 0,                    # Spacing in vertical direction - ditto
    'panelwidth': '12.6',             # X-Dimension maximum panel size (Olimex)

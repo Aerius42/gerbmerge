@@ -10,6 +10,7 @@ http://ruggedcircuits.com/gerbmerge
 """
 
 import math
+import types
 
 import config
 import strokes
@@ -75,18 +76,36 @@ def rotateGlyph(glyph, degrees, glyphName):
   return newglyph
 
 def writeFlash(fid, X, Y, D):
-  fid.write("X%07dY%07dD%02d*\n" % (X,Y,D))
-
+  if ( type(X) == types.IntType ) \
+  and ( type(Y) == types.IntType ):  ## Aerius : ensure that first two elemenst are integers
+    fid.write("X%07dY%07dD%02d*\n" % (X,Y,D))
+          
+  # Aerius : Support Oval Holes
+  elif ( type(X) == types.TupleType ) \
+  and ( type(Y) == types.TupleType ):  ## ensure that first two elemenst are tuple
+    fid.write("X%07dY%07dD%02d*\nX%07dY%07dD%02d*\n" % (X[0],Y[0],D,X[1],Y[1],D))
+  
 def drawPolyline(fid, L, offX, offY, scale=1):
   for ix in range(len(L)):
     X,Y = L[ix]
     X *= scale
     Y *= scale
-    if ix==0:
-      writeFlash(fid, X+offX, Y+offY, 2)
-    else:
-      writeFlash(fid, X+offX, Y+offY, 1)
-    
+
+    if ( type(offX) == types.IntType ) \
+    and ( type(offY) == types.IntType ):  ## Aerius : ensure that first two elemenst are integers
+      if ix==0:
+        writeFlash(fid, X+offX, Y+offY, 2)
+      else:
+        writeFlash(fid, X+offX, Y+offY, 1)
+            
+    # Aerius : Support Oval Holes
+    elif ( type(offX) == types.TupleType ) \
+    and ( type(offY) == types.TupleType ):  ## ensure that first two elemenst are tuple
+      if ix==0:
+        writeFlash(fid, (X+offX[0],X+offX[1]), (Y+offY[0],Y+offY[1]), 2)
+      else:
+        writeFlash(fid, (X+offX[0],X+offX[1]), (Y+offY[0],Y+offY[1]), 1)
+      
 def writeGlyph(fid, glyph, X, Y, degrees, glyphName=None):
   if not glyphName:
     glyphName = str(glyph)
